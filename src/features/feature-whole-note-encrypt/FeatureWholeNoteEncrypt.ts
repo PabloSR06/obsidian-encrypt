@@ -1,11 +1,12 @@
 import MeldEncrypt from "../../main.ts";
 import { IMeldEncryptPluginFeature } from "../IMeldEncryptPluginFeature.ts";
 import { EncryptedMarkdownView } from "./EncryptedMarkdownView.ts";
-import { MarkdownView, TFolder, normalizePath, moment, TFile } from "obsidian";
+import { EncryptedImageView } from "./EncryptedImageView.ts";
+import { MarkdownView, TFolder, normalizePath, moment, TFile, FileView } from "obsidian";
 import PluginPasswordModal from "../../PluginPasswordModal.ts";
 import { PasswordAndHint, SessionPasswordService } from "../../services/SessionPasswordService.ts";
 import { FileDataHelper, JsonFileEncoding } from "../../services/FileDataHelper.ts";
-import { ENCRYPTED_FILE_EXTENSIONS, ENCRYPTED_FILE_EXTENSION_DEFAULT } from "../../services/Constants.ts";
+import { ENCRYPTED_FILE_EXTENSIONS, ENCRYPTED_FILE_EXTENSION_DEFAULT, IMAGE_FILE_EXTENSIONS } from "../../services/Constants.ts";
 
 export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeature {
 
@@ -113,6 +114,7 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 
 		// register view
 		this.plugin.registerView( EncryptedMarkdownView.VIEW_TYPE, (leaf) => new EncryptedMarkdownView(leaf) );
+		this.plugin.registerView( EncryptedImageView.VIEW_TYPE, (leaf) => new EncryptedImageView(leaf) );
 		this.plugin.registerExtensions( ENCRYPTED_FILE_EXTENSIONS, EncryptedMarkdownView.VIEW_TYPE );
 
 		// show status indicator for encrypted files, hide for others
@@ -128,35 +130,44 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 		// make sure the view is the right type
 		this.plugin.registerEvent(
 
-            this.plugin.app.workspace.on('active-leaf-change', async (leaf) => {
+			this.plugin.app.workspace.on('active-leaf-change', async (leaf) => {
 				if ( leaf == null ){
 					return;
 				}
-				
-				if ( leaf.view instanceof EncryptedMarkdownView ){
-					// correct view already active
+
+				let file: TFile | null = null;
+
+				if ( leaf.view instanceof MarkdownView || leaf.view instanceof EncryptedMarkdownView || leaf.view instanceof EncryptedImageView ){
+					file = leaf.view.file;
+				} else {
 					return;
 				}
 
-				if ( leaf.view instanceof MarkdownView ){
-
-					const file = leaf.view.file;
-					if ( file == null ){
-						return;
-					}
-					
-					if ( ENCRYPTED_FILE_EXTENSIONS.includes( file.extension ) ){
-						// file is encrypted but has the wrong view type
-						const viewState = leaf.getViewState();
-						viewState.type = EncryptedMarkdownView.VIEW_TYPE;
-						
-						await leaf.setViewState( viewState );
-
-						return;
-					}
-
+				if ( file == null ){
+					return;
 				}
 
+				if ( ENCRYPTED_FILE_EXTENSIONS.includes( file.extension ) ){
+					const appropriateViewType = await this.determineViewTypeForEncryptedFile(file);	
+
+					if ( leaf.view instanceof EncryptedMarkdownView && appropriateViewType === EncryptedMarkdownView.VIEW_TYPE ){
+						// console.log('Correct view already active: ' + appropriateViewType);
+						return;
+					}
+
+					if ( leaf.view instanceof EncryptedImageView && appropriateViewType === EncryptedImageView.VIEW_TYPE ){
+						// console.log('Correct view already active: ' + appropriateViewType);
+						return;
+					}
+
+					// console.log('Switching to view type: ' + appropriateViewType);
+					const viewState = leaf.getViewState();
+					viewState.type = appropriateViewType;
+					
+					await leaf.setViewState( viewState );
+				}
+
+				return;			
 			} )
 		);
 
@@ -214,7 +225,7 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 		}
 
 		// create the new file
-		const fileData = await FileDataHelper.encrypt( pwh.password, pwh.hint, '' )
+		const fileData = await FileDataHelper.encrypt( pwh.password, pwh.hint, '', 'md' )
 		const fileContents = JsonFileEncoding.encode( fileData );
 		const file = await this.plugin.app.vault.create( newFilepath, fileContents );
 		
@@ -227,8 +238,29 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 
 	}
 
+	private async determineViewTypeForEncryptedFile(file: TFile): Promise<string> {
+		try {
+			const fileContents = await this.plugin.app.vault.read(file);
+			const encryptedData = JsonFileEncoding.decode(fileContents);
+			
+			if (encryptedData.originalFileExtension === 'md') {
+				return EncryptedMarkdownView.VIEW_TYPE;
+			} else if (encryptedData.originalFileExtension && IMAGE_FILE_EXTENSIONS.includes(encryptedData.originalFileExtension.toLowerCase())) {
+				return EncryptedImageView.VIEW_TYPE;
+			}
+
+			// TODO: CREATE GENERIC VIEW FOR OTHER FILE TYPES IN CASE IS NOT MD OR IMAGE
+			return EncryptedMarkdownView.VIEW_TYPE;
+
+		} catch (error) {
+			console.warn('Could not determine view type for encrypted file:', error);
+			return EncryptedMarkdownView.VIEW_TYPE;
+		}
+	}
+
 	onunload() {
 		this.plugin.app.workspace.detachLeavesOfType(EncryptedMarkdownView.VIEW_TYPE);
+		this.plugin.app.workspace.detachLeavesOfType(EncryptedImageView.VIEW_TYPE);
 	}
 
 	buildSettingsUi(containerEl: HTMLElement, saveSettingCallback: () => Promise<void>): void {

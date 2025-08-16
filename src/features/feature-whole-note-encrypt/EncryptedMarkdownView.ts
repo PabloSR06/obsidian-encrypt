@@ -298,7 +298,8 @@ export class EncryptedMarkdownView extends MarkdownView {
 			this.encryptedData = await FileDataHelper.encrypt(
 				this.passwordAndHint.password,
 				this.passwordAndHint.hint,
-				unencryptedDataToSave
+				unencryptedDataToSave,
+				'md'
 			);
 
 			// call the real save.. which will call getViewData... getViewData will
