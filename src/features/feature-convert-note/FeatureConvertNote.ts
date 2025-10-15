@@ -56,6 +56,44 @@ export default class FeatureConvertNote implements IMeldEncryptPluginFeature {
 			})
 		);
 
+		// editor context menu
+		this.plugin.registerEvent(
+			this.plugin.app.workspace.on('editor-menu', async (menu, editor, view) => {
+				if (view.file == null) {
+					return;
+				}
+
+				const canEncrypt = this.checkCanEncryptFile(view.file);
+				const canDecrypt = await this.checkCanDecryptFileAsync(view.file);
+
+				if (canEncrypt) {
+					menu.addItem((item) => {
+						item
+							.setTitle('Encrypt note')
+							.setIcon('file-lock-2')
+							.onClick(() => {
+								if (view.file) {
+									this.processCommandEncryptNote(view.file);
+								}
+							});
+					});
+				}
+
+				if (canDecrypt) {
+					menu.addItem((item) => {
+						item
+							.setTitle('Decrypt note')
+							.setIcon('file')
+							.onClick(() => {
+								if (view.file) {
+									this.processCommandDecryptNoteAsync(view.file);
+								}
+							});
+					});
+				}
+			})
+		);
+
 	}
 	
 	onunload(): void { }

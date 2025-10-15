@@ -114,20 +114,27 @@ export class EncryptedMarkdownView extends MarkdownView {
 				SessionPasswordService.putByFile( this.passwordAndHint, file );
 			}
 
-			this.setUnencryptedViewData( decryptedText, false );
+			this.origFile = file;
 			
+			// Temporarily store the decrypted content
+			this.cachedUnencryptedData = decryptedText;
 			
+			// Set the flag to prevent overwriting during super.onLoadFile
 			this.isLoadingFileInProgress = true;
-			try{
-				this.origFile = file;
-				await super.onLoadFile(file);
-			}finally{
-				this.isLoadingFileInProgress = false;
-				this.isSavingEnabled = true; // allow saving after the file is loaded with a password
-			}
+			
+			// Call parent's onLoadFile to initialize title and other view properties
+			await super.onLoadFile(file);
+			
+			// After super.onLoadFile, the view might have the encrypted content
+			// Force set the decrypted content again
+			this.isLoadingFileInProgress = false;
+			super.setViewData(decryptedText, false);
+			
+			this.isSavingEnabled = true; // allow saving after the file is loaded with a password
 
 		}finally{
 			//console.debug('onLoadFile done');
+			this.isLoadingFileInProgress = false;
 			this.setViewBusy( false );
 		}
 

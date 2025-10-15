@@ -2,7 +2,7 @@ import { CryptoHelperFactory } from "./CryptoHelperFactory.ts";
 
 export class FileData {
 	
-	public version = '1.0';
+	public version = '2.0';
 	public hint: string;
 	public encodedData:string;
 	public originalFileExtension?: string;
