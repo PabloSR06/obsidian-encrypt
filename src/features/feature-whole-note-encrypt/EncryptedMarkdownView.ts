@@ -2,7 +2,8 @@ import { MarkdownView, Notice, TFile, ViewStateResult } from "obsidian";
 import { FileData, FileDataHelper, JsonFileEncoding } from "../../services/FileDataHelper.ts";
 import { PasswordAndHint, SessionPasswordService } from "../../services/SessionPasswordService.ts";
 import PluginPasswordModal from "../../PluginPasswordModal.ts";
-import { ENCRYPTED_FILE_EXTENSIONS } from "../../services/Constants.ts";
+import { ENCRYPTED_FILE_EXTENSIONS, POTENTIALLY_ENCRYPTED_FILE_EXTENSIONS } from "../../services/Constants.ts";
+import { Utils } from "../../services/Utils.ts";
 
 export class EncryptedMarkdownView extends MarkdownView {
 
@@ -27,6 +28,18 @@ export class EncryptedMarkdownView extends MarkdownView {
 
 	override canAcceptExtension(extension: string): boolean {
 		return ENCRYPTED_FILE_EXTENSIONS.includes( extension );
+	}
+
+	public async canHandleFile(file: TFile): Promise<boolean> {
+		if (!POTENTIALLY_ENCRYPTED_FILE_EXTENSIONS.includes(file.extension)) {
+			return false;
+		}
+
+		if (ENCRYPTED_FILE_EXTENSIONS.includes(file.extension)) {
+			return true;
+		}
+
+		return await Utils.isMdFileEncrypted(this.app, file);
 	}
 
 	protected override async onOpen(): Promise<void> {

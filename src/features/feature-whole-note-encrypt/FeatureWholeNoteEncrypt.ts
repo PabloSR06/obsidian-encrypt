@@ -6,7 +6,8 @@ import { MarkdownView, TFolder, normalizePath, moment, TFile, FileView } from "o
 import PluginPasswordModal from "../../PluginPasswordModal.ts";
 import { PasswordAndHint, SessionPasswordService } from "../../services/SessionPasswordService.ts";
 import { FileDataHelper, JsonFileEncoding } from "../../services/FileDataHelper.ts";
-import { ENCRYPTED_FILE_EXTENSIONS, ENCRYPTED_FILE_EXTENSION_DEFAULT, IMAGE_FILE_EXTENSIONS } from "../../services/Constants.ts";
+import { ENCRYPTED_FILE_EXTENSIONS, ENCRYPTED_FILE_EXTENSION_DEFAULT, IMAGE_FILE_EXTENSIONS, POTENTIALLY_ENCRYPTED_FILE_EXTENSIONS } from "../../services/Constants.ts";
+import { Utils } from "../../services/Utils.ts";
 
 export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeature {
 
@@ -60,10 +61,16 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 		this.statusIndicator.setText('🔐');
 
 		// editor context menu
-		this.plugin.registerEvent( this.plugin.app.workspace.on('editor-menu', (menu, editor, view) => {
-			if( view.file == null || !ENCRYPTED_FILE_EXTENSIONS.includes( view.file.extension ) ){
+		this.plugin.registerEvent( this.plugin.app.workspace.on('editor-menu', async (menu, editor, view) => {
+			if( view.file == null ){
 				return;
 			}
+			
+			const shouldHandle = await Utils.shouldHandleFileAsEncrypted(this.plugin.app, view.file);
+			if( !shouldHandle ){
+				return;
+			}
+			
 			if (view instanceof EncryptedMarkdownView){
 				menu.addItem( (item) => {
 					item
@@ -82,11 +89,13 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 			}
 		}));
 
-		this.plugin.registerEvent( this.plugin.app.workspace.on('file-menu', (menu, file) => {
+		this.plugin.registerEvent( this.plugin.app.workspace.on('file-menu', async (menu, file) => {
 			if ( !(file instanceof TFile) ){
 				return
 			}
-			if( !ENCRYPTED_FILE_EXTENSIONS.includes( file.extension ) ){
+			
+			const shouldHandle = await Utils.shouldHandleFileAsEncrypted(this.plugin.app, file);
+			if( !shouldHandle ){
 				return;
 			}
 
@@ -147,7 +156,10 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 					return;
 				}
 
-				if ( ENCRYPTED_FILE_EXTENSIONS.includes( file.extension ) ){
+				// Check if file should be handled as encrypted
+				const shouldHandleAsEncrypted = await Utils.shouldHandleFileAsEncrypted(this.plugin.app, file);
+
+				if ( shouldHandleAsEncrypted ){
 					const appropriateViewType = await this.determineViewTypeForEncryptedFile(file);	
 
 					if ( leaf.view instanceof EncryptedMarkdownView && appropriateViewType === EncryptedMarkdownView.VIEW_TYPE ){
@@ -169,6 +181,48 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 
 				return;			
 			} )
+		);
+
+		// Also listen for file modifications to handle encryption/decryption changes
+		this.plugin.registerEvent(
+			this.plugin.app.vault.on('modify', async (file) => {
+				if (!(file instanceof TFile) || file.extension !== 'md') {
+					return;
+				}
+
+				// Small delay to ensure file content is properly updated
+				setTimeout(async () => {
+					// Find any open leaves with this file
+					this.plugin.app.workspace.iterateAllLeaves((leaf) => {
+						if (leaf.view instanceof MarkdownView && leaf.view.file === file) {
+							// Check if this file should now be handled as encrypted
+							Utils.shouldHandleFileAsEncrypted(this.plugin.app, file).then(async (shouldHandleAsEncrypted) => {
+								if (shouldHandleAsEncrypted) {
+									console.log('Switching .md file to encrypted view:', file.path);
+									const appropriateViewType = await this.determineViewTypeForEncryptedFile(file);
+									const viewState = leaf.getViewState();
+									viewState.type = appropriateViewType;
+									await leaf.setViewState(viewState);
+								}
+							}).catch(error => {
+								console.warn('Error checking if file should be encrypted:', error);
+							});
+						} else if (leaf.view instanceof EncryptedMarkdownView && leaf.view.file === file) {
+							// Check if this file should no longer be handled as encrypted
+							Utils.shouldHandleFileAsEncrypted(this.plugin.app, file).then(async (shouldHandleAsEncrypted) => {
+								if (!shouldHandleAsEncrypted) {
+									console.log('Switching .md file to normal markdown view:', file.path);
+									const viewState = leaf.getViewState();
+									viewState.type = 'markdown';
+									await leaf.setViewState(viewState);
+								}
+							}).catch(error => {
+								console.warn('Error checking if file should be decrypted:', error);
+							});
+						}
+					});
+				}, 150);
+			})
 		);
 
 	}
@@ -196,7 +250,8 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 
 	private async processCreateNewEncryptedNoteCommand( parentFolder: TFolder ) : Promise<void> {
 		
-		const newFilename = moment().format( `[Untitled] YYYYMMDD hhmmss[.${ENCRYPTED_FILE_EXTENSION_DEFAULT}]`);
+		// Create .md files with encrypted JSON content instead of .mdenc files
+		const newFilename = moment().format( `[Untitled] YYYYMMDD hhmmss[.md]`);
 		const newFilepath = normalizePath( parentFolder.path + "/" + newFilename );
 		
 		let pwh : PasswordAndHint | undefined;

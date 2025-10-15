@@ -6,7 +6,7 @@ import PluginPasswordModal from "../../PluginPasswordModal.ts";
 import { PasswordAndHint, SessionPasswordService } from "../../services/SessionPasswordService.ts";
 import { FileDataHelper, JsonFileEncoding } from "../../services/FileDataHelper.ts";
 import { Utils } from "../../services/Utils.ts";
-import { DEFAULT_ENCRYPTABLE_FILE_EXTENSIONS, ENCRYPTED_FILE_EXTENSIONS, ENCRYPTED_FILE_EXTENSION_DEFAULT, IMAGE_FILE_EXTENSIONS } from "../../services/Constants.ts";
+import { DEFAULT_ENCRYPTABLE_FILE_EXTENSIONS, ENCRYPTED_FILE_EXTENSIONS, ENCRYPTED_FILE_EXTENSION_DEFAULT, IMAGE_FILE_EXTENSIONS, POTENTIALLY_ENCRYPTED_FILE_EXTENSIONS } from "../../services/Constants.ts";
 import { EncryptedMarkdownView } from "../feature-whole-note-encrypt/EncryptedMarkdownView.ts";
 import { EncryptedImageView } from "../feature-whole-note-encrypt/EncryptedImageView.ts";
 
@@ -43,12 +43,12 @@ export default class FeatureConvertNote implements IMeldEncryptPluginFeature {
 							}
 						);
 					}
-					if ( ENCRYPTED_FILE_EXTENSIONS.includes( file.extension ) ){
+					if ( POTENTIALLY_ENCRYPTED_FILE_EXTENSIONS.includes( file.extension ) ){
 						menu.addItem( (item) => {
 							item
 								.setTitle('Decrypt note')
 								.setIcon('file')
-								.onClick( () => this.processCommandDecryptNote( file ) );
+								.onClick( () => this.processCommandDecryptNoteAsync( file ) );
 							}
 						);
 					}
@@ -76,6 +76,27 @@ export default class FeatureConvertNote implements IMeldEncryptPluginFeature {
 		return ENCRYPTED_FILE_EXTENSIONS.includes( file.extension );
 	}
 
+	/**
+	 * Async version of checkCanDecryptFile that also checks .md file content
+	 */
+	private async checkCanDecryptFileAsync( file:TFile | null ) : Promise<boolean> {
+		if ( file == null ){
+			return false;
+		}
+		
+		if (!POTENTIALLY_ENCRYPTED_FILE_EXTENSIONS.includes( file.extension )) {
+			return false;
+		}
+		
+		// Old encrypted extensions
+		if (ENCRYPTED_FILE_EXTENSIONS.includes(file.extension)) {
+			return true;
+		}
+		
+		// Check if they contain encrypted content
+		return await Utils.isMdFileEncrypted(this.plugin.app, file);
+	}
+
 	private isImageFile( file:TFile | null ) : boolean {
 		if ( file == null ){
 			return false;
@@ -99,6 +120,22 @@ export default class FeatureConvertNote implements IMeldEncryptPluginFeature {
 		});
 	}
 
+	private processCommandDecryptNoteAsync( file:TFile ){
+		this.processCommandDecryptNoteWithCheck( file ).catch( reason => {
+			if (reason){
+				new Notice(reason, 10000);
+			}
+		});
+	}
+
+	private async processCommandDecryptNoteWithCheck( file:TFile ){
+		if (!(await this.checkCanDecryptFileAsync(file))) {
+			throw new Error('This file does not contain encrypted content');
+		}
+		
+		await this.getPasswordAndDecryptFile( file );
+	}
+
 	private processCommandConvertActiveNote( checking: boolean ) : boolean | void {
 		const file = this.plugin.app.workspace.getActiveFile();
 		
@@ -116,8 +153,9 @@ export default class FeatureConvertNote implements IMeldEncryptPluginFeature {
 			});
 		}
 
-		if ( file && ENCRYPTED_FILE_EXTENSIONS.includes( file.extension ) ){
-			this.getPasswordAndDecryptFile( file ).catch( reason => {
+		if ( file && POTENTIALLY_ENCRYPTED_FILE_EXTENSIONS.includes( file.extension ) ){
+			// Use the async check for proper .md file handling
+			this.processCommandDecryptNoteWithCheck( file ).catch( reason => {
 				if (reason){
 					new Notice(reason, 10000);
 				}
@@ -144,9 +182,12 @@ export default class FeatureConvertNote implements IMeldEncryptPluginFeature {
 
 			const encryptedFileContent = await this.encryptFile(file, password);
 
+			// Encrypt in md extension or default encrypted extension
+			const newExtension = file.extension === 'md' ? 'md' : ENCRYPTED_FILE_EXTENSION_DEFAULT;
+
 			await this.closeUpdateRememberPasswordThenReopen(
 				file,
-				ENCRYPTED_FILE_EXTENSION_DEFAULT,
+				newExtension,
 				encryptedFileContent,
 				password
 			);
@@ -161,7 +202,7 @@ export default class FeatureConvertNote implements IMeldEncryptPluginFeature {
 	}
 
 	private async getPasswordAndDecryptFile( file:TFile ) {
-		if ( !this.checkCanDecryptFile(file) ) {
+		if ( !(await this.checkCanDecryptFileAsync(file)) ) {
 			throw new Error( 'Unable to decrypt file' );
 		}
 
@@ -178,7 +219,8 @@ export default class FeatureConvertNote implements IMeldEncryptPluginFeature {
 				if (isOriginallyImage && decryptedContent instanceof ArrayBuffer) {
 					await this.closeUpdateRememberPasswordThenReopenBinary( file, encryptedData.originalFileExtension || 'png', decryptedContent, passwordAndHint );
 				} else if (typeof decryptedContent === 'string') {
-					await this.closeUpdateRememberPasswordThenReopen( file, encryptedData.originalFileExtension || 'md', decryptedContent, passwordAndHint );
+					const targetExtension = file.extension === 'md' ? 'md' : (encryptedData.originalFileExtension || 'md');
+					await this.closeUpdateRememberPasswordThenReopen( file, targetExtension, decryptedContent, passwordAndHint );
 				}
 				return;
 			}
@@ -200,7 +242,8 @@ export default class FeatureConvertNote implements IMeldEncryptPluginFeature {
 			if (isOriginallyImage && content instanceof ArrayBuffer) {
 				await this.closeUpdateRememberPasswordThenReopenBinary( file, encryptedData.originalFileExtension || 'png', content, passwordAndHint );
 			} else if (typeof content === 'string') {
-				await this.closeUpdateRememberPasswordThenReopen( file, encryptedData.originalFileExtension || 'md', content, passwordAndHint );
+				const targetExtension = file.extension === 'md' ? 'md' : (encryptedData.originalFileExtension || 'md');
+				await this.closeUpdateRememberPasswordThenReopen( file, targetExtension, content, passwordAndHint );
 			}
 
 			new Notice( '🔓 Note was decrypted 🔓' );
@@ -215,10 +258,12 @@ export default class FeatureConvertNote implements IMeldEncryptPluginFeature {
 	private async closeUpdateRememberPasswordThenReopen( file:TFile, newFileExtension: string, content: string, pw:PasswordAndHint ) {
 		
 		let didDetach = false;
+		let wasEncryptedView = false;
 
 		this.plugin.app.workspace.iterateAllLeaves( l => {
 			if ( l.view instanceof TextFileView && l.view.file == file ){
 				if ( l.view instanceof EncryptedMarkdownView ){
+					wasEncryptedView = true;
 					l.view.detachSafely();
 				}else{
 					l.detach();
@@ -229,12 +274,35 @@ export default class FeatureConvertNote implements IMeldEncryptPluginFeature {
 
 		try{
 			const newFilepath = Utils.getFilePathWithNewExtension(file, newFileExtension);
-			await this.plugin.app.fileManager.renameFile( file, newFilepath );
+			if (file.extension !== newFileExtension) {
+				await this.plugin.app.fileManager.renameFile( file, newFilepath );
+			}
 			await this.plugin.app.vault.modify( file, content );
 			SessionPasswordService.putByFile( pw, file );
+			
+			if (file.extension === 'md' && newFileExtension === 'md') {
+				await new Promise(resolve => setTimeout(resolve, 100));
+			}
 		}finally{
 			if( didDetach ){
-				await this.plugin.app.workspace.getLeaf( true ).openFile(file);
+				const leaf = this.plugin.app.workspace.getLeaf( true );
+				await leaf.openFile(file);
+
+				if (file.extension === 'md') {
+					// For .md files, force the correct view if encrypted
+					setTimeout(async () => {
+						const shouldBeEncrypted = await Utils.isMdFileEncrypted(this.plugin.app, file);
+						if (shouldBeEncrypted && !(leaf.view instanceof EncryptedMarkdownView)) {
+							const viewState = leaf.getViewState();
+							viewState.type = EncryptedMarkdownView.VIEW_TYPE;
+							await leaf.setViewState(viewState);
+						} else if (!shouldBeEncrypted && leaf.view instanceof EncryptedMarkdownView) {
+							const viewState = leaf.getViewState();
+							viewState.type = 'markdown';
+							await leaf.setViewState(viewState);
+						}
+					}, 200);
+				}
 			}
 		}
 	}
@@ -259,7 +327,7 @@ export default class FeatureConvertNote implements IMeldEncryptPluginFeature {
 			await this.plugin.app.fileManager.renameFile( file, newFilepath );
 			// For binary files, use createBinary instead of modify
 			await this.plugin.app.vault.delete(file);
-			await this.plugin.app.vault.createBinary( newFilepath, new Uint8Array(binaryContent) );
+			await this.plugin.app.vault.createBinary( newFilepath, binaryContent );
 			// Update the file reference
 			const newFile = this.plugin.app.vault.getAbstractFileByPath(newFilepath) as TFile;
 			SessionPasswordService.putByFile( pw, newFile );
