@@ -1,5 +1,5 @@
 {
-	"name": "meld-encrypt",
+	"name": "meld-encrypt-vp",
 	"version": "2.4.5",
 	"description": "Hide secrets in your vault",
 	"main": "main.js",

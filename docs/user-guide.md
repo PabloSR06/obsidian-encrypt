@@ -7,13 +7,9 @@ has_children: true
 
 # User Guide 
 
-Obsidian Encrypt offers two encryption modes:
+Obsidian Encrypt lets you create **Whole Encrypted Notes** where entire note files are encrypted. The contents are completely inaccessible without a password.
 
-* **Whole Encrypted Notes** mode encrypts an entire note file. The contents are completely inaccessible without a password.
-
-* **In-Place Encryption** mode encrypts only selected parts of text within an existing note, allowing you to protect sensitive sections while keeping the rest readable.
-
-The following sections will guide you through how to use each mode.
+The following sections will guide you through how to use encrypted notes.
 
 
    
