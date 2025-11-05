@@ -12,6 +12,10 @@ export default class MeldEncrypt extends Plugin {
 
 	private enabledFeatures : IMeldEncryptPluginFeature[] = [];
 
+	public getSettings(): IMeldEncryptPluginSettings {
+		return this.settings;
+	}
+
 	async onload() {
 		
 		SessionPasswordService.init(this.app.vault.adapter);
@@ -77,6 +81,8 @@ export default class MeldEncrypt extends Plugin {
 			rememberPasswordExternalFilePaths: [],
 
 			featureWholeNoteEncrypt: {
+				autoSaveMode: 'delayed',
+				autoSaveDelay: 2
 			}
 		}
 

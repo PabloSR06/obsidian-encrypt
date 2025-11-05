@@ -4,6 +4,7 @@ import { PasswordAndHint, SessionPasswordService } from "../../services/SessionP
 import PluginPasswordModal from "../../PluginPasswordModal.ts";
 import { ENCRYPTED_FILE_EXTENSIONS, POTENTIALLY_ENCRYPTED_FILE_EXTENSIONS } from "../../services/Constants.ts";
 import { Utils } from "../../services/Utils.ts";
+import { IMeldEncryptPluginSettings } from "../../settings/MeldEncryptPluginSettings.ts";
 
 export class EncryptedMarkdownView extends MarkdownView {
 
@@ -17,6 +18,10 @@ export class EncryptedMarkdownView extends MarkdownView {
 	isSavingEnabled = false;
 	isLoadingFileInProgress = false;
 	isSavingInProgress = false;
+	
+	saveDebounceTimer: NodeJS.Timeout | null = null;
+	settings: IMeldEncryptPluginSettings;
+	unsavedIndicator: HTMLElement | null = null;
 	
 	override allowNoFile = false;
 
@@ -57,6 +62,40 @@ export class EncryptedMarkdownView extends MarkdownView {
 			'Lock & Close',
 			() => this.lockAndClose(),
 		)
+
+		this.addAction(
+			'save',
+			'Save encrypted note',
+			() => this.saveManually(),
+		)
+
+		this.createUnsavedIndicator();
+	}
+
+	private createUnsavedIndicator(): void {
+		const viewHeader = this.containerEl.querySelector('.view-header');
+		if (viewHeader) {
+			this.unsavedIndicator = viewHeader.createDiv({
+				cls: 'meld-encrypt-unsaved-indicator',
+				attr: { 
+					'aria-label': 'Unsaved changes',
+					'style': 'display: none; margin-left: 8px; color: var(--text-warning); font-weight: bold;'
+				}
+			});
+			this.unsavedIndicator.setText('●');
+		}
+	}
+
+	private updateUnsavedIndicator(): void {
+		if (!this.unsavedIndicator) return;
+		
+		if (this.dataWasChangedSinceLastSave) {
+			this.unsavedIndicator.style.display = 'inline';
+			this.unsavedIndicator.setAttribute('aria-label', 'Unsaved changes');
+		} else {
+			this.unsavedIndicator.style.display = 'none';
+			this.unsavedIndicator.setAttribute('aria-label', 'All changes saved');
+		}
 	}
 
 	override async onLoadFile(file: TFile): Promise<void> {
@@ -155,6 +194,11 @@ export class EncryptedMarkdownView extends MarkdownView {
 	}
 
 	override async onUnloadFile(file: TFile): Promise<void> {
+		
+		if (this.saveDebounceTimer) {
+			clearTimeout(this.saveDebounceTimer);
+			this.saveDebounceTimer = null;
+		}
 		
 		if ( this.passwordAndHint == null || this.encryptedData == null ) {
 			return;
@@ -262,6 +306,47 @@ export class EncryptedMarkdownView extends MarkdownView {
 
 	override async save(clear?: boolean | undefined): Promise<void> {
 		console.debug('save', { clear });
+		
+		const saveMode = this.settings?.featureWholeNoteEncrypt?.autoSaveMode || 'auto';
+		
+		if (saveMode === 'manual') {
+			console.info('Auto-saving is disabled. Use the manual save action to save changes.');
+			this.dataWasChangedSinceLastSave = true;
+			this.updateUnsavedIndicator();
+			return;
+		}
+		
+		if (saveMode === 'delayed') {
+			if (this.saveDebounceTimer) {
+				clearTimeout(this.saveDebounceTimer);
+			}
+			
+			this.dataWasChangedSinceLastSave = true;
+			this.updateUnsavedIndicator();
+			
+			// Set up debounced save
+			const delaySeconds = this.settings?.featureWholeNoteEncrypt?.autoSaveDelay || 3;
+			console.debug(`Delaying save for ${delaySeconds} seconds...`);
+			
+			this.saveDebounceTimer = setTimeout(() => {
+				console.debug('Debounce timer expired, saving now...');
+				this.performSave(clear);
+			}, delaySeconds * 1000);
+			
+			return;
+		}
+		
+		await this.performSave(clear);
+	}
+
+	async saveManually(): Promise<void> {
+		console.debug('Manual save triggered');
+		await this.performSave();
+		new Notice('Encrypted note saved');
+	}
+
+	private async performSave(clear?: boolean | undefined): Promise<void> {
+		console.debug('performSave', { clear });
 		if ( this.isSavingInProgress ) {
 			console.info('Saving was prevented because another save is in progress, Obsidian will try again later if the content changed.');
 			return;
@@ -329,6 +414,7 @@ export class EncryptedMarkdownView extends MarkdownView {
 			await super.save(clear);
 
 			this.dataWasChangedSinceLastSave = false;
+			this.updateUnsavedIndicator();
 
 		} finally{
 			this.isSavingInProgress = false;
@@ -367,6 +453,7 @@ export class EncryptedMarkdownView extends MarkdownView {
 			SessionPasswordService.putByFile( newPwh, this.file );
 
 			this.dataWasChangedSinceLastSave = true;
+			this.updateUnsavedIndicator();
 			await this.save();
 
 			new Notice( 'Password changed' );

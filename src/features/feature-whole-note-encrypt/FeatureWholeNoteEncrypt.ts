@@ -2,7 +2,7 @@ import MeldEncrypt from "../../main.ts";
 import { IMeldEncryptPluginFeature } from "../IMeldEncryptPluginFeature.ts";
 import { EncryptedMarkdownView } from "./EncryptedMarkdownView.ts";
 import { EncryptedImageView } from "./EncryptedImageView.ts";
-import { MarkdownView, TFolder, normalizePath, moment, TFile, FileView } from "obsidian";
+import { MarkdownView, TFolder, normalizePath, moment, TFile, FileView, Setting } from "obsidian";
 import PluginPasswordModal from "../../PluginPasswordModal.ts";
 import { PasswordAndHint, SessionPasswordService } from "../../services/SessionPasswordService.ts";
 import { FileDataHelper, JsonFileEncoding } from "../../services/FileDataHelper.ts";
@@ -122,7 +122,11 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 
 
 		// register view
-		this.plugin.registerView( EncryptedMarkdownView.VIEW_TYPE, (leaf) => new EncryptedMarkdownView(leaf) );
+		this.plugin.registerView( EncryptedMarkdownView.VIEW_TYPE, (leaf) => {
+			const view = new EncryptedMarkdownView(leaf);
+			view.settings = this.plugin.getSettings();
+			return view;
+		});
 		this.plugin.registerView( EncryptedImageView.VIEW_TYPE, (leaf) => new EncryptedImageView(leaf) );
 		this.plugin.registerExtensions( ENCRYPTED_FILE_EXTENSIONS, EncryptedMarkdownView.VIEW_TYPE );
 
@@ -319,7 +323,50 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 	}
 
 	buildSettingsUi(containerEl: HTMLElement, saveSettingCallback: () => Promise<void>): void {
-		//throw new Error("Method not implemented.");
+		const settings = this.plugin.getSettings();
+		
+
+		const updateAutoSaveDelayUi = () => {
+			const autoSaveMode = settings.featureWholeNoteEncrypt.autoSaveMode;
+			
+			if (autoSaveMode === 'delayed') {
+				autoSaveDelaySetting.settingEl.show();
+			} else {
+				autoSaveDelaySetting.settingEl.hide();
+			}
+		};
+
+		new Setting(containerEl)
+			.setName('Auto-save mode')
+			.setDesc('Choose when encrypted notes should be saved')
+			.addDropdown(dropdown => {
+				dropdown
+					.addOption('auto', 'Auto (save immediately)')
+					.addOption('delayed', 'Delayed (save after typing stops)')
+					.addOption('manual', 'Manual (use save button only)')
+					.setValue(settings.featureWholeNoteEncrypt.autoSaveMode)
+					.onChange(async (value: 'auto' | 'manual' | 'delayed') => {
+						settings.featureWholeNoteEncrypt.autoSaveMode = value;
+						await saveSettingCallback();
+						updateAutoSaveDelayUi();
+					});
+			});
+
+		const autoSaveDelaySetting = new Setting(containerEl)
+			.setName('Auto-save delay')
+			.setDesc('Seconds to wait after typing stops before saving (1-30 seconds)')
+			.addSlider(slider => {
+				slider
+					.setLimits(1, 30, 1)
+					.setValue(settings.featureWholeNoteEncrypt.autoSaveDelay)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						settings.featureWholeNoteEncrypt.autoSaveDelay = value;
+						await saveSettingCallback();
+					});
+			});
+
+		updateAutoSaveDelayUi();
 	}
 
 }

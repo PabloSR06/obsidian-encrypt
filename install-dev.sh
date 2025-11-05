@@ -1,9 +1,8 @@
 #!/bin/bash
 
 # Script to build and install the plugin to your Obsidian vault
-PARENT_PATH=$( cd "$(dirname "${BASH_SOURCE[0]}")" ; pwd -P )
 
-VAULT_PATH="$PARENT_PATH/Documents/Testing/.obsidian/plugins"
+VAULT_PATH="$HOME/Documents/Testing/.obsidian/plugins"
 PLUGIN_NAME="meld-encrypt-vp"
 
 echo "Building plugin..."

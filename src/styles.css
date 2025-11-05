@@ -11,4 +11,23 @@ div[data-type="meld-encrypted-view"] .view-content {
   overflow: hidden;
 }
 
+/* Unsaved changes indicator */
+.meld-encrypt-unsaved-indicator {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 1.2em;
+	color: var(--text-warning);
+	animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+	0%, 100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.5;
+	}
+}
+
 /* END FEATURE ENCRYPTED MD */
