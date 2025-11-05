@@ -276,7 +276,8 @@ export class EncryptedMarkdownView extends MarkdownView {
 				return;
 			}
 
-			if ( !ENCRYPTED_FILE_EXTENSIONS.includes( this.file.extension ) ){
+			const canHandle = await this.canHandleFile(this.file);
+			if (!canHandle){
 				console.info('Saving was prevented because the file is not an encrypted file');
 				return;
 			}
