@@ -70,6 +70,16 @@ export class EncryptedMarkdownView extends MarkdownView {
 		)
 
 		this.createUnsavedIndicator();
+
+		// Register Ctrl+S hotkey using Obsidian's Scope system
+		if (this.scope) {
+			this.scope.register(['Mod'], 's', (evt) => {
+				console.log('[EncryptedMarkdownView] Scope hotkey Mod+s triggered!');
+				evt.preventDefault();
+				this.saveManually();
+				return false; // Prevent default behavior
+			});
+		}
 	}
 
 	private createUnsavedIndicator(): void {
@@ -342,6 +352,8 @@ export class EncryptedMarkdownView extends MarkdownView {
 	async saveManually(): Promise<void> {
 		console.debug('Manual save triggered');
 		await this.performSave();
+		this.dataWasChangedSinceLastSave = false;
+		this.updateUnsavedIndicator();
 		new Notice('Encrypted note saved');
 	}
 

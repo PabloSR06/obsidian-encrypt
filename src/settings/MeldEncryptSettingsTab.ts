@@ -3,6 +3,7 @@ import { IMeldEncryptPluginFeature } from "../features/IMeldEncryptPluginFeature
 import { SessionPasswordService } from "../services/SessionPasswordService.ts";
 import MeldEncrypt from "../main.ts";
 import { IMeldEncryptPluginSettings } from "./MeldEncryptPluginSettings.ts";
+import ConfirmModal from "../ConfirmModal.ts";
 
 export default class MeldEncryptSettingsTab extends PluginSettingTab {
 	plugin: MeldEncrypt;
@@ -166,6 +167,84 @@ export default class MeldEncryptSettingsTab extends PluginSettingTab {
 		this.features.forEach(f => {
 			f.buildSettingsUi( containerEl, async () => await this.plugin.saveSettings() );
 		});
+
+		// Bulk encryption/decryption options
+		containerEl.createEl('h2', { text: 'Bulk Operations' });
+
+		new Setting(containerEl)
+			.setName('Ignore paths for bulk operations')
+			.setDesc('Files or folders to ignore during bulk encrypt/decrypt operations. Use glob patterns (e.g., "folder/**", "*.excalidraw.md"). One pattern per line.')
+			.addTextArea(text => {
+				text
+					.setValue(this.settings.bulkOperationIgnorePaths.join('\n'))
+					.onChange(async value => {
+						this.settings.bulkOperationIgnorePaths = value
+							.split('\n')
+							.map(p => p.trim())
+							.filter(p => p.length > 0);
+						await this.plugin.saveSettings();
+					});
+				text.inputEl.placeholder = 'Examples:\nTemplates/**\n*.excalidraw.md\nArchive/Old Notes/**';
+				text.inputEl.style.whiteSpace = 'pre';
+				text.inputEl.style.width = '100%';
+				text.inputEl.rows = 4;
+			});
+
+		new Setting(containerEl)
+			.setName('Decrypt all notes')
+			.setDesc('Decrypt all encrypted notes in the vault. You will be prompted for passwords as needed.')
+			.addButton(button => {
+				button
+					.setButtonText('Decrypt All')
+					.setWarning()
+					.onClick(async () => {
+						console.log('Decrypt All button clicked');
+						console.log('Available features:', this.features.map(f => f.constructor.name));
+						new ConfirmModal(
+							this.app,
+							'Are you sure you want to decrypt all encrypted notes in the vault? This action cannot be undone automatically.',
+							async () => {
+								console.log('User confirmed decryption');
+								const wholeNoteFeature = this.features.find(f => 'decryptAllNotes' in f);
+								console.log('Found feature:', wholeNoteFeature?.constructor.name);
+								if (wholeNoteFeature && 'decryptAllNotes' in wholeNoteFeature) {
+									console.log('Calling decryptAllNotes...');
+									await (wholeNoteFeature as any).decryptAllNotes();
+								} else {
+									console.error('Feature not found or method not available');
+								}
+							}
+						).open();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName('Encrypt all notes')
+			.setDesc('Encrypt all unencrypted markdown notes in the vault. You will be prompted for passwords as needed.')
+			.addButton(button => {
+				button
+					.setButtonText('Encrypt All')
+					.setWarning()
+					.onClick(async () => {
+						console.log('Encrypt All button clicked');
+						console.log('Available features:', this.features.map(f => f.constructor.name));
+						new ConfirmModal(
+							this.app,
+							'Are you sure you want to encrypt all unencrypted markdown notes in the vault? This action cannot be undone automatically.',
+							async () => {
+								console.log('User confirmed encryption');
+								const wholeNoteFeature = this.features.find(f => 'encryptAllNotes' in f);
+								console.log('Found feature:', wholeNoteFeature?.constructor.name);
+								if (wholeNoteFeature && 'encryptAllNotes' in wholeNoteFeature) {
+									console.log('Calling encryptAllNotes...');
+									await (wholeNoteFeature as any).encryptAllNotes();
+								} else {
+									console.error('Feature not found or method not available');
+								}
+							}
+						).open();
+					});
+			});
 		
 	}
 

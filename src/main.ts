@@ -79,6 +79,7 @@ export default class MeldEncrypt extends Plugin {
 			rememberPasswordTimeout: 30,
 			rememberPasswordLevel: SessionPasswordService.LevelVault,
 			rememberPasswordExternalFilePaths: [],
+			bulkOperationIgnorePaths: [],
 
 			featureWholeNoteEncrypt: {
 				autoSaveMode: 'delayed',
