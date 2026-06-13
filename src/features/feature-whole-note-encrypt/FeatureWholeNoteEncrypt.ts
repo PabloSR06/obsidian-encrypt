@@ -2,7 +2,7 @@ import MeldEncrypt from "../../main.ts";
 import { IMeldEncryptPluginFeature } from "../IMeldEncryptPluginFeature.ts";
 import { EncryptedMarkdownView } from "./EncryptedMarkdownView.ts";
 import { EncryptedImageView } from "./EncryptedImageView.ts";
-import { MarkdownView, TFolder, normalizePath, moment, TFile, FileView, Setting, Notice } from "obsidian";
+import { MarkdownView, TFolder, normalizePath, moment, TFile, FileView, Setting, Notice, parseYaml, CachedMetadata } from "obsidian";
 import PluginPasswordModal from "../../PluginPasswordModal.ts";
 import { PasswordAndHint, SessionPasswordService } from "../../services/SessionPasswordService.ts";
 import { FileDataHelper, JsonFileEncoding } from "../../services/FileDataHelper.ts";
@@ -14,6 +14,8 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 	plugin: MeldEncrypt;
 
 	private statusIndicator: HTMLElement;
+	private originalGetFileCache: ((file: TFile) => CachedMetadata | null) | null = null;
+	private syntheticMetadataCache = new Map<string, CachedMetadata>();
 
 	private shouldIgnorePath(filePath: string, ignorePatterns: string[]): boolean {
 		if (ignorePatterns.length === 0) {
@@ -167,6 +169,9 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 		}))
 
 
+		// Patch metadataCache.getFileCache to serve decrypted frontmatter for encrypted files
+		this.patchGetFileCache();
+
 		// register view
 		this.plugin.registerView( EncryptedMarkdownView.VIEW_TYPE, (leaf) => {
 			const view = new EncryptedMarkdownView(leaf);
@@ -231,6 +236,18 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 
 				return;			
 			} )
+		);
+
+		// Detect .base file opening decrypt notes for property indexing
+		this.plugin.registerEvent(
+			this.plugin.app.workspace.on('active-leaf-change', async (leaf) => {
+				if (leaf == null) return;
+				const view = leaf.view as any;
+				const file = view?.file as TFile | undefined;
+				if (file?.extension === 'base') {
+					await this.decryptAllNotesForMetadataCache();
+				}
+			})
 		);
 
 		// Also listen for file modifications to handle encryption/decryption changes
@@ -364,8 +381,113 @@ export default class FeatureWholeNoteEncryptV2 implements IMeldEncryptPluginFeat
 	}
 
 	onunload() {
+		if (this.originalGetFileCache) {
+			this.plugin.app.metadataCache.getFileCache = this.originalGetFileCache;
+			this.originalGetFileCache = null;
+		}
 		this.plugin.app.workspace.detachLeavesOfType(EncryptedMarkdownView.VIEW_TYPE);
 		this.plugin.app.workspace.detachLeavesOfType(EncryptedImageView.VIEW_TYPE);
+	}
+
+	private patchGetFileCache(): void {
+		const mc = this.plugin.app.metadataCache;
+		this.originalGetFileCache = mc.getFileCache.bind(mc);
+		const originalFn = this.originalGetFileCache!;
+		const cache = this.syntheticMetadataCache;
+
+		mc.getFileCache = (file: TFile): CachedMetadata | null => {
+			return cache.get(file.path) ?? originalFn(file);
+		};
+	}
+
+	/**
+	 * Decrypt all encrypted notes and inject their frontmatter into
+	 * the metadata cache so .base (Database) views can read properties.
+	 */
+	private async decryptAllNotesForMetadataCache(): Promise<void> {
+		const files = this.plugin.app.vault.getFiles();
+		const encryptedFiles: TFile[] = [];
+
+		for (const file of files) {
+			if (this.syntheticMetadataCache.has(file.path)) continue;
+			if (!POTENTIALLY_ENCRYPTED_FILE_EXTENSIONS.includes(file.extension)) continue;
+			try {
+				const content = await this.plugin.app.vault.read(file);
+				if (Utils.isEncryptedContent(content)) {
+					encryptedFiles.push(file);
+				}
+			} catch (e) { /* skip */ }
+		}
+
+		if (encryptedFiles.length === 0) return;
+
+		// Get password
+		let password: string | null = null;
+		const cachedPwh = await SessionPasswordService.getByPathAsync(encryptedFiles[0]?.path ?? '');
+
+		if (cachedPwh && cachedPwh.password.trim() !== '') {
+			password = cachedPwh.password;
+		} else {
+			try {
+				const pwh = await new PluginPasswordModal(
+					this.plugin.app, 'Enter password to unlock notes for Database view', false, false, null
+				).openAsync();
+				password = pwh.password;
+				SessionPasswordService.putByPath(pwh, encryptedFiles[0]?.path ?? '');
+			} catch (e) { return; }
+		}
+
+		if (!password) return;
+
+		let count = 0;
+		for (const file of encryptedFiles) {
+			try {
+				const raw = await this.plugin.app.vault.read(file);
+				const encrypted = JsonFileEncoding.decode(raw);
+				const decrypted = await FileDataHelper.decrypt(encrypted, password);
+				if (decrypted === null) continue;
+
+				const meta = this.buildMetadataFromContent(decrypted);
+				if (meta) {
+					this.syntheticMetadataCache.set(file.path, meta);
+					count++;
+				}
+			} catch (e) { /* skip */ }
+		}
+
+		if (count > 0) {
+			// Notify Obsidian that metadata changed
+			const mc = this.plugin.app.metadataCache as any;
+			for (const [path] of this.syntheticMetadataCache) {
+				const file = this.plugin.app.vault.getAbstractFileByPath(path);
+				if (file instanceof TFile) {
+					mc.trigger('changed', file, '', this.syntheticMetadataCache.get(path));
+				}
+			}
+			mc.trigger('resolved');
+			new Notice(`Unlocked ${count} encrypted notes for Database view`);
+		}
+	}
+
+	private buildMetadataFromContent(content: string): CachedMetadata | null {
+		const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+		if (!match) return null;
+
+		try {
+			const parsed = parseYaml(match[1]);
+			if (!parsed || typeof parsed !== 'object') return null;
+
+			const lines = match[0].split('\n');
+			const pos = {
+				start: { line: 0, col: 0, offset: 0 },
+				end: { line: lines.length - 1, col: 3, offset: match[0].length }
+			};
+
+			return {
+				frontmatter: { ...parsed, position: pos },
+				frontmatterPosition: pos,
+			};
+		} catch (e) { return null; }
 	}
 
 	async decryptAllNotes(): Promise<void> {
